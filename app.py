@@ -7,54 +7,67 @@ Original file is located at
     https://colab.research.google.com/drive/1FEAWS5v8AAblXHa7VXEhWKkzU_PX5AkV
 """
 
-# app.py
 import streamlit as st
 import pandas as pd
-from io import BytesIO
 
-st.set_page_config(page_title="Wavepick Late Checker", layout="centered")
+st.set_page_config(page_title="Wavepick Late Checker", layout="wide")
+st.title("📦 Wavepick Late Checker - Zona View")
 
-st.title("📦 Wavepick Late Recap")
-st.write("Upload file Excel mentah lo, dan sistem bakal hitung wavepick yang terlambat per STYPE.")
-
-uploaded_file = st.file_uploader("Upload file .xlsx", type=["xlsx"])
+uploaded_file = st.file_uploader("Upload file Excel", type=["xlsx", "xls"])
 
 if uploaded_file:
-    # Load Excel
-    xls = pd.ExcelFile(uploaded_file)
-    df = xls.parse("Worksheet")
+    # Load semua sheet
+    try:
+        xls = pd.ExcelFile(uploaded_file)
+        df_raw = pd.read_excel(xls, sheet_name="Worksheet")
+        df_zona = pd.read_excel(xls, sheet_name="Zona")
+        df_zona_ps1 = pd.read_excel(xls, sheet_name="Zona PS1")
+    except Exception as e:
+        st.error(f"Gagal baca sheet: {e}")
+        st.stop()
 
-    # Convert necessary fields
-    df['Wavepick Created'] = pd.to_datetime(df['Wavepick Created'], errors='coerce')
-    df['Confirm Date'] = pd.to_datetime(df['Confirm Date'], errors='coerce')
-    df['Confirm Time'] = pd.to_timedelta(df['Confirm Time'], errors='coerce')
-    df['Confirm Datetime'] = df['Confirm Date'] + df['Confirm Time']
+    # Filter kondisi "late"
+    df = df_raw.copy()
+    df['Confirm date'] = pd.to_datetime(df['Confirm date'], errors='coerce')
+    df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce').dt.time
+    df['Wavepick created'] = pd.to_datetime(df['Wavepick created'], errors='coerce')
 
-    # Filter late wavepicks
-    mask_late = (
-        (df['Qty'] > 0) &
-        (df['Flag'] == 'A') &
-        (df['Confirm Datetime'].isna())
-    )
-    late_df = df[mask_late]
+    df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A') & (df['Confirm time'].astype(str) == '00:00:00')]
 
-    # Count unique wavepicks per STYPE
-    count_df = late_df.groupby('Stype')['Wavepick No'].nunique().reset_index()
-    count_df.columns = ['STYPE', 'Wavepick Late']
+    # Map ZONA (gabungan STYPE)
+    stype_to_zona = df_zona.groupby('STYPE')['ZONA'].first().to_dict()
+    df_late['ZONA'] = df_late['STYPE'].map(stype_to_zona)
 
-    st.subheader("📊 Hasil Rekap:")
-    st.dataframe(count_df)
+    # Handle STYPE = PS1 yang pakai MID
+    df_ps1 = df_late[df_late['STYPE'] == 'PS1']
+    df_ps1 = df_ps1.merge(df_zona_ps1, on='MID', how='left')
+    df_ps1 = df_ps1.drop(columns='ZONA_x').rename(columns={'ZONA_y': 'ZONA'})
 
-    # Download option
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Worksheet')
-        count_df.to_excel(writer, index=False, sheet_name='Count')
-    output.seek(0)
+    # Gabungkan kembali dengan data lain
+    df_others = df_late[df_late['STYPE'] != 'PS1']
+    df_final = pd.concat([df_others, df_ps1], ignore_index=True)
 
-    st.download_button(
-        label="📥 Download Hasil Excel",
-        data=output,
-        file_name="wavepick_recap.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Isi NaN ZONA sebagai 'Unmapped'
+    df_final['ZONA'] = df_final['ZONA'].fillna('Unmapped')
+
+    # Hitung jumlah wavepick unik per zona
+    zona_summary = df_final.groupby('ZONA')['Wavepick'].nunique().reset_index()
+    zona_summary.columns = ['ZONA', 'Jumlah Wavepick Late']
+    zona_summary = zona_summary.sort_values(by='Jumlah Wavepick Late', ascending=False)
+
+    st.subheader("📊 Ringkasan Wavepick Late per ZONA")
+    st.dataframe(zona_summary, use_container_width=True)
+
+    st.bar_chart(zona_summary.set_index('ZONA'))
+
+    # Highlight data late >6 jam
+    df_final['late_diff'] = (df_final['Confirm date'] - df_final['Wavepick created'])
+    df_final['late_diff_hour'] = df_final['late_diff'].dt.total_seconds() / 3600
+    df_warn = df_final[df_final['late_diff_hour'] > 6]
+
+    if not df_warn.empty:
+        st.warning(f"🚨 Ada {len(df_warn)} wavepick yang telat lebih dari 6 jam!")
+        with st.expander("Lihat detail wavepick telat >6 jam"):
+            st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
+else:
+    st.info("Silakan upload file Excel untuk mulai.")
