@@ -11,23 +11,53 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="Wavepick Late Checker", layout="wide")
-st.title("📦 Wavepick Late Checker - Zona View")
+st.title("\U0001F4E6 Wavepick Late Checker - Zona View")
 
 uploaded_file = st.file_uploader("Upload file Excel", type=["xlsx", "xls"])
 
+# Load referensi zona dari file lokal (file internal dev)
+try:
+    df_zona = pd.read_excel("referensi_zona.xlsx", sheet_name="Zona")
+    df_zona_ps1 = pd.read_excel("referensi_zona.xlsx", sheet_name="Zona PS1")
+except Exception as e:
+    st.error(f"Gagal load data referensi zona: {e}")
+    st.stop()
+
 if uploaded_file:
-    # Load semua sheet
     try:
-        xls = pd.ExcelFile(uploaded_file)
-        df_raw = pd.read_excel(xls, sheet_name="Worksheet")
-        df_zona = pd.read_excel(xls, sheet_name="Zona")
-        df_zona_ps1 = pd.read_excel(xls, sheet_name="Zona PS1")
+        if uploaded_file.name.endswith(".xls"):
+            df_raw = pd.read_excel(uploaded_file, sheet_name=0, engine="xlrd")
+        else:
+            df_raw = pd.read_excel(uploaded_file, sheet_name=0)
     except Exception as e:
-        st.error(f"Gagal baca sheet: {e}")
+        st.error(f"Gagal baca sheet dari file user: {e}")
         st.stop()
 
     # Filter kondisi "late"
     df = df_raw.copy()
+
+    # Normalisasi nama kolom
+    df.columns = df.columns.str.strip()
+
+    # Normalisasi dan rename kolom agar sesuai format user
+    column_mapping = {
+        'Confirm Date': 'Confirm date',
+        'Confirm Time': 'Confirm time',
+        'Qty': 'Qty',
+        'Flag': 'Flag',
+        'Wavepick Created': 'Wavepick created',
+        'Wavepick No': 'Wavepick',
+        'Stype': 'STYPE',
+        'Material ID': 'MID'
+    }
+    df = df.rename(columns=column_mapping)
+
+    required_columns = list(column_mapping.values())
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        st.error(f"File yang diupload tidak mengandung kolom berikut: {', '.join(missing_columns)}")
+        st.stop()
+
     df['Confirm date'] = pd.to_datetime(df['Confirm date'], errors='coerce')
     df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce').dt.time
     df['Wavepick created'] = pd.to_datetime(df['Wavepick created'], errors='coerce')
@@ -39,34 +69,41 @@ if uploaded_file:
     df_late['ZONA'] = df_late['STYPE'].map(stype_to_zona)
 
     # Handle STYPE = PS1 yang pakai MID
-    df_ps1 = df_late[df_late['STYPE'] == 'PS1']
-    df_ps1 = df_ps1.merge(df_zona_ps1, on='MID', how='left')
-    df_ps1 = df_ps1.drop(columns='ZONA_x').rename(columns={'ZONA_y': 'ZONA'})
+    df_late = df_late.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
 
-    # Gabungkan kembali dengan data lain
-    df_others = df_late[df_late['STYPE'] != 'PS1']
-    df_final = pd.concat([df_others, df_ps1], ignore_index=True)
+    # Prioritaskan mapping dari Zona PS1 (MID-based) jika ada
+    df_late['ZONA'] = df_late['ZONA_ps1'].combine_first(df_late['ZONA'])
+    df_late = df_late.drop(columns=['ZONA_ps1'])
+
+    # Mapping ulang jika hasil MID ada di zona gabungan
+    zona_map = {
+        'ZAA': 'A',
+        'ZAB': 'BK',
+        'ZAC': 'CJ',
+        'ZAL': 'L'
+    }
+    df_late['ZONA'] = df_late['ZONA'].replace(zona_map)
 
     # Isi NaN ZONA sebagai 'Unmapped'
-    df_final['ZONA'] = df_final['ZONA'].fillna('Unmapped')
+    df_late['ZONA'] = df_late['ZONA'].fillna('Unmapped')
 
-    # Hitung jumlah wavepick unik per zona
-    zona_summary = df_final.groupby('ZONA')['Wavepick'].nunique().reset_index()
+    # Hitung jumlah wavepick unik per zona (tanpa Unmapped dan Unnamed)
+    zona_summary = df_late[~df_late['ZONA'].isin(['Unmapped', 'Unnamed'])].groupby('ZONA')['Wavepick'].nunique().reset_index()
     zona_summary.columns = ['ZONA', 'Jumlah Wavepick Late']
     zona_summary = zona_summary.sort_values(by='Jumlah Wavepick Late', ascending=False)
 
-    st.subheader("📊 Ringkasan Wavepick Late per ZONA")
+    st.subheader("\U0001F4CA Ringkasan Wavepick Late per ZONA")
     st.dataframe(zona_summary, use_container_width=True)
 
     st.bar_chart(zona_summary.set_index('ZONA'))
 
     # Highlight data late >6 jam
-    df_final['late_diff'] = (df_final['Confirm date'] - df_final['Wavepick created'])
-    df_final['late_diff_hour'] = df_final['late_diff'].dt.total_seconds() / 3600
-    df_warn = df_final[df_final['late_diff_hour'] > 6]
+    df_late['late_diff'] = (df_late['Confirm date'] - df_late['Wavepick created'])
+    df_late['late_diff_hour'] = df_late['late_diff'].dt.total_seconds() / 3600
+    df_warn = df_late[df_late['late_diff_hour'] > 6]
 
     if not df_warn.empty:
-        st.warning(f"🚨 Ada {len(df_warn)} wavepick yang telat lebih dari 6 jam!")
+        st.warning(f"\U0001F6A8 Ada {len(df_warn)} wavepick yang telat lebih dari 6 jam!")
         with st.expander("Lihat detail wavepick telat >6 jam"):
             st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
 else:
