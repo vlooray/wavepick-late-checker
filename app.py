@@ -9,9 +9,10 @@ Original file is located at
 
 import streamlit as st
 import pandas as pd
+import datetime
 
-st.set_page_config(page_title="Wavepick Late Checker", layout="wide")
-st.title("\U0001F4E6 Wavepick Late Checker - Zona View")
+st.set_page_config(page_title="Project Monitor Abram", layout="wide")
+st.title("\U0001F4E6 Dashboard Monitoring Durasi Picking/SPKB")
 
 uploaded_file = st.file_uploader("Upload file Excel", type=["xlsx", "xls"])
 
@@ -59,10 +60,10 @@ if uploaded_file:
         st.stop()
 
     df['Confirm date'] = pd.to_datetime(df['Confirm date'], errors='coerce')
-    df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce').dt.time
+    df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce')
     df['Wavepick created'] = pd.to_datetime(df['Wavepick created'], errors='coerce')
 
-    df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A') & (df['Confirm time'].astype(str) == '00:00:00')]
+    df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A') & (df['Confirm time'].dt.time.astype(str) == '00:00:00')]
 
     # Map ZONA (gabungan STYPE)
     stype_to_zona = df_zona.groupby('STYPE')['ZONA'].first().to_dict()
@@ -110,14 +111,13 @@ if uploaded_file:
             st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
 
     # Tambahan: Hitung durasi picking per zona per wavepick
-    df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C')].copy()
+    df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C') & (df['Confirm time'].dt.time.astype(str) != '00:00:00')].copy()
     df_pick['ZONA'] = df_pick['STYPE'].map(stype_to_zona)
     df_pick = df_pick.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
     df_pick['ZONA'] = df_pick['ZONA_ps1'].combine_first(df_pick['ZONA'])
     df_pick = df_pick.drop(columns=['ZONA_ps1'])
     df_pick['ZONA'] = df_pick['ZONA'].replace(zona_map)
 
-    # Hitung durasi picking per zona dan wavepick
     df_pick['Confirm time'] = pd.to_datetime(df_pick['Confirm time'], errors='coerce')
     pick_duration = df_pick.groupby(['ZONA', 'Wavepick']).agg(
         start_time=('Confirm time', 'min'),
@@ -125,9 +125,29 @@ if uploaded_file:
         total_mid=('MID', 'nunique'),
         total_qty=('Qty', 'sum')
     ).reset_index()
-    pick_duration['duration_hours'] = (pick_duration['end_time'] - pick_duration['start_time']).dt.total_seconds() / 3600
+    pick_duration['duration'] = pick_duration['end_time'] - pick_duration['start_time']
+    pick_duration['duration'] = pick_duration['duration'].apply(lambda x: str(x).split('.')[0])
 
     st.subheader("⏱️ Durasi Picking per Wavepick dan Zona")
     st.dataframe(pick_duration, use_container_width=True)
+
+    # Fitur tambahan: Durasi picking per wavepick berdasarkan status flag
+    st.subheader("⏱️ Durasi Picking Berdasarkan Status Wavepick")
+    df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce')
+    now = pd.Timestamp.now()
+
+    df_valid_time = df[df['Confirm time'].dt.time.astype(str) != '00:00:00']
+    wavepick_status = df.groupby('Wavepick')['Flag'].apply(lambda x: (x == 'C').all()).reset_index(name='is_complete')
+    wavepick_time = df_valid_time.groupby('Wavepick')['Confirm time'].agg(['min', 'max']).reset_index()
+    wavepick_status = wavepick_status.merge(wavepick_time, on='Wavepick', how='left')
+    wavepick_status['end_time'] = wavepick_status.apply(lambda row: row['max'] if row['is_complete'] else now, axis=1)
+    wavepick_status['duration'] = wavepick_status['end_time'] - wavepick_status['min']
+    wavepick_status['duration'] = wavepick_status['duration'].apply(lambda x: str(x).split('.')[0])
+
+    st.dataframe(wavepick_status.rename(columns={
+        'min': '1st Confirm Time',
+        'max': 'Last Confirm Time'
+    })[['Wavepick', 'is_complete', '1st Confirm Time', 'Last Confirm Time', 'end_time', 'duration']], use_container_width=True)
+
 else:
     st.info("Silakan upload file Excel untuk mulai.")
