@@ -12,9 +12,9 @@ import pandas as pd
 import datetime
 
 st.set_page_config(page_title="Wavepick Late Checker", layout="wide")
-st.title("\U0001F4E6 Wavepick Late Checker - Zona View")
+st.title("\U0001F4E6 Dashboard Monitoring Durasi Picking")
 
-uploaded_file = st.file_uploader("Upload file Excel", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("silakan upload ", type=["xlsx", "xls"])
 
 # Load referensi zona dari file lokal (file internal dev)
 try:
