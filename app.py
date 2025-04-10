@@ -11,8 +11,8 @@ import streamlit as st
 import pandas as pd
 import datetime
 
-st.set_page_config(page_title="Project Monitor Abram", layout="wide")
-st.title("\U0001F4E6 Dashboard Monitoring Durasi Picking/SPKB")
+st.set_page_config(page_title="Wavepick Late Checker", layout="wide")
+st.title("\U0001F4E6 Wavepick Late Checker - Zona View")
 
 uploaded_file = st.file_uploader("Upload file Excel", type=["xlsx", "xls"])
 
@@ -34,13 +34,10 @@ if uploaded_file:
         st.error(f"Gagal baca sheet dari file user: {e}")
         st.stop()
 
-    # Filter kondisi "late"
     df = df_raw.copy()
 
-    # Normalisasi nama kolom
     df.columns = df.columns.str.strip()
 
-    # Normalisasi dan rename kolom agar sesuai format user
     column_mapping = {
         'Confirm Date': 'Confirm date',
         'Confirm Time': 'Confirm time',
@@ -65,18 +62,13 @@ if uploaded_file:
 
     df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A') & (df['Confirm time'].dt.time.astype(str) == '00:00:00')]
 
-    # Map ZONA (gabungan STYPE)
     stype_to_zona = df_zona.groupby('STYPE')['ZONA'].first().to_dict()
     df_late['ZONA'] = df_late['STYPE'].map(stype_to_zona)
 
-    # Handle STYPE = PS1 yang pakai MID
     df_late = df_late.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
-
-    # Prioritaskan mapping dari Zona PS1 (MID-based) jika ada
     df_late['ZONA'] = df_late['ZONA_ps1'].combine_first(df_late['ZONA'])
     df_late = df_late.drop(columns=['ZONA_ps1'])
 
-    # Mapping ulang jika hasil MID ada di zona gabungan
     zona_map = {
         'ZAA': 'A',
         'ZAB': 'BK',
@@ -85,13 +77,9 @@ if uploaded_file:
     }
     df_late['ZONA'] = df_late['ZONA'].replace(zona_map)
 
-    # Hapus duplikat berdasarkan kombinasi unik: Wavepick + ZONA
     df_late = df_late.drop_duplicates(subset=['Wavepick', 'ZONA'])
-
-    # Isi NaN ZONA sebagai 'Unmapped'
     df_late['ZONA'] = df_late['ZONA'].fillna('Unmapped')
 
-    # Hitung jumlah wavepick unik per zona (tanpa Unmapped dan Unnamed)
     zona_summary = df_late[~df_late['ZONA'].isin(['Unmapped', 'Unnamed'])].groupby('ZONA')['Wavepick'].nunique().reset_index()
     zona_summary.columns = ['ZONA', 'Jumlah Wavepick Late']
     zona_summary = zona_summary.sort_values(by='Jumlah Wavepick Late', ascending=False)
@@ -100,7 +88,6 @@ if uploaded_file:
     st.dataframe(zona_summary, use_container_width=True)
     st.bar_chart(zona_summary.set_index('ZONA'))
 
-    # Highlight data late >6 jam
     df_late['late_diff'] = (df_late['Confirm date'] - df_late['Wavepick created'])
     df_late['late_diff_hour'] = df_late['late_diff'].dt.total_seconds() / 3600
     df_warn = df_late[df_late['late_diff_hour'] > 6]
@@ -110,7 +97,6 @@ if uploaded_file:
         with st.expander("Lihat detail wavepick telat >6 jam"):
             st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
 
-    # Tambahan: Hitung durasi picking per zona per wavepick
     df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C') & (df['Confirm time'].dt.time.astype(str) != '00:00:00')].copy()
     df_pick['ZONA'] = df_pick['STYPE'].map(stype_to_zona)
     df_pick = df_pick.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
@@ -131,7 +117,26 @@ if uploaded_file:
     st.subheader("⏱️ Durasi Picking per Wavepick dan Zona")
     st.dataframe(pick_duration, use_container_width=True)
 
-    # Fitur tambahan: Durasi picking per wavepick berdasarkan status flag
+    # Rata-rata durasi per zona
+    zona_avg_duration = pick_duration.groupby('ZONA')['duration'].apply(
+        lambda x: pd.to_timedelta(x).mean()
+    ).reset_index()
+    zona_avg_duration['duration'] = zona_avg_duration['duration'].apply(lambda x: str(x).split('.')[0])
+    zona_avg_duration.columns = ['ZONA', 'Rata-rata Durasi Picking']
+
+    st.subheader("📊 Rata-rata Durasi Picking per Zona")
+    st.dataframe(zona_avg_duration, use_container_width=True)
+
+    # Rata-rata durasi per wavepick
+    wavepick_avg_duration = pick_duration.groupby('Wavepick')['duration'].apply(
+        lambda x: pd.to_timedelta(x).mean()
+    ).reset_index()
+    wavepick_avg_duration['duration'] = wavepick_avg_duration['duration'].apply(lambda x: str(x).split('.')[0])
+    wavepick_avg_duration.columns = ['Wavepick', 'Rata-rata Durasi Picking']
+
+    st.subheader("📊 Rata-rata Durasi Picking per Wavepick")
+    st.dataframe(wavepick_avg_duration, use_container_width=True)
+
     st.subheader("⏱️ Durasi Picking Berdasarkan Status Wavepick")
     df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce')
     now = pd.Timestamp.now()
