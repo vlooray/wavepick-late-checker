@@ -60,7 +60,7 @@ if uploaded_file:
     df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce')
     df['Wavepick created'] = pd.to_datetime(df['Wavepick created'], errors='coerce')
 
-    df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A') & (df['Confirm time'].dt.time.astype(str) == '00:00:00')]
+    df_late = df[(df['Qty'] > 0) & (df['Flag'] == 'A')].copy()
 
     stype_to_zona = df_zona.groupby('STYPE')['ZONA'].first().to_dict()
     df_late['ZONA'] = df_late['STYPE'].map(stype_to_zona)
@@ -97,7 +97,7 @@ if uploaded_file:
         with st.expander("Lihat detail wavepick telat >6 jam"):
             st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
 
-    df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C') & (df['Confirm time'].dt.time.astype(str) != '00:00:00')].copy()
+    df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C')].copy()
     df_pick['ZONA'] = df_pick['STYPE'].map(stype_to_zona)
     df_pick = df_pick.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
     df_pick['ZONA'] = df_pick['ZONA_ps1'].combine_first(df_pick['ZONA'])
@@ -105,8 +105,11 @@ if uploaded_file:
     df_pick['ZONA'] = df_pick['ZONA'].replace(zona_map)
 
     df_pick['Confirm time'] = pd.to_datetime(df_pick['Confirm time'], errors='coerce')
+    pick_start_times = df_pick.groupby('Wavepick')['Confirm time'].min().rename('wavepick_start_time')
+    df_pick = df_pick.merge(pick_start_times, on='Wavepick')
+
     pick_duration = df_pick.groupby(['ZONA', 'Wavepick']).agg(
-        start_time=('Confirm time', 'min'),
+        start_time=('wavepick_start_time', 'first'),
         end_time=('Confirm time', 'max'),
         total_mid=('MID', 'nunique'),
         total_qty=('Qty', 'sum')
@@ -117,7 +120,6 @@ if uploaded_file:
     st.subheader("⏱️ Durasi Picking per Wavepick dan Zona")
     st.dataframe(pick_duration, use_container_width=True)
 
-    # Rata-rata durasi per zona
     zona_avg_duration = pick_duration.groupby('ZONA')['duration'].apply(
         lambda x: pd.to_timedelta(x).mean()
     ).reset_index()
@@ -127,7 +129,6 @@ if uploaded_file:
     st.subheader("📊 Rata-rata Durasi Picking per Zona")
     st.dataframe(zona_avg_duration, use_container_width=True)
 
-    # Rata-rata durasi per wavepick
     wavepick_avg_duration = pick_duration.groupby('Wavepick')['duration'].apply(
         lambda x: pd.to_timedelta(x).mean()
     ).reset_index()
@@ -141,18 +142,22 @@ if uploaded_file:
     df['Confirm time'] = pd.to_datetime(df['Confirm time'], errors='coerce')
     now = pd.Timestamp.now()
 
-    df_valid_time = df[df['Confirm time'].dt.time.astype(str) != '00:00:00']
-    wavepick_status = df.groupby('Wavepick')['Flag'].apply(lambda x: (x == 'C').all()).reset_index(name='is_complete')
-    wavepick_time = df_valid_time.groupby('Wavepick')['Confirm time'].agg(['min', 'max']).reset_index()
-    wavepick_status = wavepick_status.merge(wavepick_time, on='Wavepick', how='left')
+    df_valid_time = df[(df['Confirm time'].dt.time.astype(str) != '00:00:00') & (df['Qty'] > 0)]
+    wavepick_status_base = df_valid_time.groupby('Wavepick')['Flag'].apply(lambda x: (x == 'C').all()).reset_index(name='is_complete')
+
+    df_for_status_duration = df_valid_time.copy()
+    wavepick_time = df_for_status_duration.groupby('Wavepick')['Confirm time'].agg(['min', 'max']).reset_index()
+    wavepick_status = wavepick_status_base.merge(wavepick_time, on='Wavepick', how='left')
     wavepick_status['end_time'] = wavepick_status.apply(lambda row: row['max'] if row['is_complete'] else now, axis=1)
     wavepick_status['duration'] = wavepick_status['end_time'] - wavepick_status['min']
     wavepick_status['duration'] = wavepick_status['duration'].apply(lambda x: str(x).split('.')[0])
 
     st.dataframe(wavepick_status.rename(columns={
         'min': '1st Confirm Time',
-        'max': 'Last Confirm Time'
-    })[['Wavepick', 'is_complete', '1st Confirm Time', 'Last Confirm Time', 'end_time', 'duration']], use_container_width=True)
+        'max': 'Last Confirm Time',
+        'duration': 'Duration (1st to Last Confirm Time)',
+        'end_time': 'End Time (actual or now)'
+    })[['Wavepick', 'is_complete', '1st Confirm Time', 'Last Confirm Time', 'End Time (actual or now)', 'Duration (1st to Last Confirm Time)']], use_container_width=True)
 
 else:
     st.info("Silakan upload file Excel untuk mulai.")
