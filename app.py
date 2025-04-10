@@ -84,6 +84,9 @@ if uploaded_file:
     }
     df_late['ZONA'] = df_late['ZONA'].replace(zona_map)
 
+    # Hapus duplikat berdasarkan kombinasi unik: Wavepick + ZONA
+    df_late = df_late.drop_duplicates(subset=['Wavepick', 'ZONA'])
+
     # Isi NaN ZONA sebagai 'Unmapped'
     df_late['ZONA'] = df_late['ZONA'].fillna('Unmapped')
 
@@ -94,7 +97,6 @@ if uploaded_file:
 
     st.subheader("\U0001F4CA Ringkasan Wavepick Late per ZONA")
     st.dataframe(zona_summary, use_container_width=True)
-
     st.bar_chart(zona_summary.set_index('ZONA'))
 
     # Highlight data late >6 jam
@@ -106,5 +108,26 @@ if uploaded_file:
         st.warning(f"\U0001F6A8 Ada {len(df_warn)} wavepick yang telat lebih dari 6 jam!")
         with st.expander("Lihat detail wavepick telat >6 jam"):
             st.dataframe(df_warn[['Wavepick', 'ZONA', 'STYPE', 'MID', 'late_diff_hour']], use_container_width=True)
+
+    # Tambahan: Hitung durasi picking per zona per wavepick
+    df_pick = df[(df['Qty'] > 0) & (df['Flag'] == 'C')].copy()
+    df_pick['ZONA'] = df_pick['STYPE'].map(stype_to_zona)
+    df_pick = df_pick.merge(df_zona_ps1, on='MID', how='left', suffixes=('', '_ps1'))
+    df_pick['ZONA'] = df_pick['ZONA_ps1'].combine_first(df_pick['ZONA'])
+    df_pick = df_pick.drop(columns=['ZONA_ps1'])
+    df_pick['ZONA'] = df_pick['ZONA'].replace(zona_map)
+
+    # Hitung durasi picking per zona dan wavepick
+    df_pick['Confirm time'] = pd.to_datetime(df_pick['Confirm time'], errors='coerce')
+    pick_duration = df_pick.groupby(['ZONA', 'Wavepick']).agg(
+        start_time=('Confirm time', 'min'),
+        end_time=('Confirm time', 'max'),
+        total_mid=('MID', 'nunique'),
+        total_qty=('Qty', 'sum')
+    ).reset_index()
+    pick_duration['duration_hours'] = (pick_duration['end_time'] - pick_duration['start_time']).dt.total_seconds() / 3600
+
+    st.subheader("⏱️ Durasi Picking per Wavepick dan Zona")
+    st.dataframe(pick_duration, use_container_width=True)
 else:
     st.info("Silakan upload file Excel untuk mulai.")
